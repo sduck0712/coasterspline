@@ -3,17 +3,27 @@ using UnityEngine;
 
 namespace CoasterSpline
 {
+    // 정/역 방향 선택 (휠 Transform.forward 기준)
     public enum PushDirection { Forward = 1, Reverse = -1 }
 
+    // 가속 휠 그룹(스테이션 / 힐1 / 힐2) 공통 설정
     [System.Serializable]
     public class AccelGroup
     {
+        [Tooltip("이 그룹에 속한 CoasterAccelerator 목록")]
         public CoasterAccelerator[] accelerators;
 
         [Header("힘 설정")]
+        [Tooltip("밀어줄 힘의 크기(부호는 Direction으로 결정)")]
         public float force = 50f;
+
+        [Tooltip("속도 제한 (이 값 초과 시 GetForce가 0 또는 Brake 동작)")]
         public float maxSpeed = 2f;
+
+        [Tooltip("감속(브레이크) 힘")]
         public float brakeForce = 0f;
+
+        [Tooltip("Forward=+1, Reverse=-1 (휠 Transform.forward 기준)")]
         public PushDirection direction = PushDirection.Forward;
     }
 
@@ -31,30 +41,32 @@ namespace CoasterSpline
         public AccelGroup lifthill2 = new AccelGroup();
 
         [Header("Start / Flow")]
+        [Tooltip("플레이 직후 자동 출발 여부 (교육 시 OFF 권장)")]
         public bool  autoStartOnPlay = false;
-        public float startDelaySec    = 0f;
+
+        [Tooltip("자동 출발을 사용할 때 지연(초)")]
+        public float startDelaySec = 0f;
+
+        [Tooltip("스테이션 센서(Enter)만으로 출발을 허용할지 (기본: 꺼짐, UI로만 출발)")]
         public bool  allowSensorStart = false;
 
         [Header("Brakes")]
+        [Tooltip("스테이션으로 복귀하며 지나갈 때 약한 감속")]
         public float returnBrakeForce = 2f;
+
+        [Tooltip("스테이션에 정지시키는 강한 감속")]
         public float finalBrakeForce  = 30f;
 
-        int  state = 0;     // 0 idle, 1 st->h1, 2 h1->h2, 3 back, 4 almost stop
-        bool armed = false; // UI start 눌러 무장?
+        // 상태: 0=대기, 1=스테이션→힐1, 2=힐1정상→힐2(역방향), 3=힐2정상→스테이션 복귀, 4=정지 직전
+        int  state = 0;
+        bool armed = false; // UI Start로 시동 무장했는지
 
-        bool _isHooked = false; // GM 이벤트 구독 성공 여부 캐시
+        bool _hooked = false; // GameModeManager 이벤트 구독 여부
 
-        // ───────────────────────────── Unity Hooks
-
-        void Awake()
-        {
-            Debug.Log("[Boomerang] Awake");
-        }
-
+        // ─────────────────────────────────────────────────────
         void OnEnable()
         {
-            Debug.Log("[Boomerang] OnEnable");
-            // 센서
+            // 센서 연결
             if (stationSensor)
             {
                 stationSensor.OnTrainEnter.AddListener(OnStationEnter);
@@ -63,15 +75,21 @@ namespace CoasterSpline
             if (lifthill1TopSensor) lifthill1TopSensor.OnTrainEnter.AddListener(OnLifthill1Top);
             if (lifthill2TopSensor) lifthill2TopSensor.OnTrainEnter.AddListener(OnLifthill2Top);
 
-            EnsureHookToGameMode();
+            // (선택) GameModeManager 있으면 시작 이벤트만 구독
+            var gm = GameModeManager.I;
+            if (gm && !_hooked)
+            {
+                gm.OnRunStart.AddListener(StartRunFromUI);
+                _hooked = true;
+            }
         }
 
         void Start()
         {
-            Debug.Log("[Boomerang] Start");
+            // 시작 시 모든 휠 OFF
             StopAllGroups();
-            EnsureHookToGameMode(); // Awake 순서 문제 대비
 
+            // 자동 출발 옵션
             if (autoStartOnPlay)
             {
                 armed = true;
@@ -82,8 +100,7 @@ namespace CoasterSpline
 
         void OnDisable()
         {
-            Debug.Log("[Boomerang] OnDisable");
-            // 센서
+            // 센서 해제
             if (stationSensor)
             {
                 stationSensor.OnTrainEnter.RemoveListener(OnStationEnter);
@@ -92,68 +109,39 @@ namespace CoasterSpline
             if (lifthill1TopSensor) lifthill1TopSensor.OnTrainEnter.RemoveListener(OnLifthill1Top);
             if (lifthill2TopSensor) lifthill2TopSensor.OnTrainEnter.RemoveListener(OnLifthill2Top);
 
-            UnhookFromGameMode();
-        }
-
-        // ───────────────────────────── GM 연동
-
-        void EnsureHookToGameMode()
-        {
-            if (_isHooked) return;
+            // GM 해제
             var gm = GameModeManager.I;
-            if (gm != null)
-            {
-                gm.OnRunStart.AddListener(StartRunFromUI);
-                gm.OnRunEnd.AddListener(ResetFlow);
-                gm.OnRunReset.AddListener(ResetFlow);
-                _isHooked = true;
-                Debug.Log("[Boomerang] Subscribed to GameModeManager events");
-            }
-            else
-            {
-                Debug.LogWarning("[Boomerang] GameModeManager.I is null (will retry at Start).");
-            }
-        }
-
-        void UnhookFromGameMode()
-        {
-            if (!_isHooked) return;
-            var gm = GameModeManager.I;
-            if (gm != null)
+            if (gm && _hooked)
             {
                 gm.OnRunStart.RemoveListener(StartRunFromUI);
-                gm.OnRunEnd.RemoveListener(ResetFlow);
-                gm.OnRunReset.RemoveListener(ResetFlow);
             }
-            _isHooked = false;
+            _hooked = false;
         }
 
-        // ───────────────────────────── 외부 제어
-
+        // ─────────────────────────────────────────────────────
+        // 외부 제어 (UI/매니저에서 호출)
         public void StartRunFromUI()
         {
-            Debug.Log("[Boomerang] StartRunFromUI");
             armed = true;
             StartFromStation();
         }
 
         public void ResetFlow()
         {
-            Debug.Log("[Boomerang] ResetFlow");
             CancelInvoke();
             StopAllGroups();
             state = 0;
             armed = false;
         }
 
-        // ───────────────────────────── Flow
-
+        // ─────────────────────────────────────────────────────
+        // 상태 흐름
         void OnStationEnter()
         {
-            Debug.Log($"[Boomerang] StationEnter (state={state}, allowSensorStart={allowSensorStart}, armed={armed})");
-
+            // 기본 정책: 센서로는 출발하지 않음
             if (!allowSensorStart)
             {
+                // 다만 정지 절차는 유지 (state==4에서 강브레이크)
                 if (state == 4)
                 {
                     SetBrakeOnly(station, finalBrakeForce);
@@ -163,6 +151,7 @@ namespace CoasterSpline
                 return;
             }
 
+            // 센서 출발 허용 시에도 UI로 무장하지 않으면 무시
             if (!autoStartOnPlay && !armed) return;
 
             if (state == 0)
@@ -180,7 +169,7 @@ namespace CoasterSpline
 
         void OnStationExit()
         {
-            Debug.Log($"[Boomerang] StationExit (state={state})");
+            // 복귀 중 스테이션을 지나갈 때 약한 브레이크
             if (state == 3)
             {
                 state = 4;
@@ -190,7 +179,7 @@ namespace CoasterSpline
 
         void StartFromStation()
         {
-            Debug.Log("[Boomerang] StartFromStation -> Station+Lift1 ON");
+            // 스테이션 + 힐1 ON, 힐2 OFF
             ApplyGroup(station,  true);
             ApplyGroup(lifthill1,true);
             ApplyGroup(lifthill2,false);
@@ -199,9 +188,9 @@ namespace CoasterSpline
 
         void OnLifthill1Top()
         {
-            Debug.Log($"[Boomerang] Lifthill1Top (state={state})");
             if (state != 1) return;
 
+            // 힐1 정상 도달 → 스테이션/힐1 OFF, 힐2 ON
             ApplyGroup(station,  false);
             ApplyGroup(lifthill1,false);
             ApplyGroup(lifthill2,true);
@@ -210,44 +199,37 @@ namespace CoasterSpline
 
         void OnLifthill2Top()
         {
-            Debug.Log($"[Boomerang] Lifthill2Top (state={state})");
             if (state != 2) return;
 
+            // 힐2 정상 도달 → 힐2 OFF, 관성으로 스테이션 복귀
             ApplyGroup(lifthill2,false);
             state = 3;
         }
 
-        // ───────────────────────────── Group helpers
-
+        // ─────────────────────────────────────────────────────
+        // 그룹 제어 유틸
         void ApplyGroup(AccelGroup g, bool active)
         {
-            if (g == null || g.accelerators == null)
-            {
-                Debug.LogWarning("[Boomerang] ApplyGroup: group is null");
-                return;
-            }
+            if (g == null || g.accelerators == null) return;
 
             foreach (var acc in g.accelerators)
             {
                 if (!acc) continue;
 
-                // MaxSpeed은 항상 세팅
                 acc.MaxSpeed = g.maxSpeed;
 
                 if (active)
                 {
-                    float signed = (int)g.direction * Mathf.Abs(g.force);
-                    acc.Force      = signed;
+                    float signedForce = (int)g.direction * Mathf.Abs(g.force);
+                    acc.Force      = signedForce;
                     acc.BreakForce = g.brakeForce;
-                    acc.enabled    = true; // 안전
-                    Debug.Log($"[Boomerang] ON  {acc.name}  F={acc.Force}  Max={acc.MaxSpeed}  Brake={acc.BreakForce}");
+                    acc.enabled    = true;   // 시각화 유지
                 }
                 else
                 {
                     acc.Force      = 0f;
                     acc.BreakForce = 0f;
-                    acc.enabled    = true; // 비활성화 안 함(시각화 유지)
-                    Debug.Log($"[Boomerang] OFF {acc.name}  F={acc.Force}");
+                    acc.enabled    = true;   // 끄지 않음
                 }
             }
         }
@@ -261,7 +243,6 @@ namespace CoasterSpline
                 acc.Force      = 0f;
                 acc.BreakForce = brake;
                 acc.enabled    = true;
-                Debug.Log($"[Boomerang] BRAKE {acc.name}  Brake={acc.BreakForce}");
             }
         }
 
