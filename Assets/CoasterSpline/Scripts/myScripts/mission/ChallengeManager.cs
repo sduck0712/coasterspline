@@ -1,43 +1,74 @@
-// Assets/CoasterSpline/Scripts/myScripts/ChallengeManager.cs
+// Assets/CoasterSpline/Scripts/myScripts/mission/ChallengeManager.cs
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace CoasterSpline
 {
     /// <summary>
-    /// 챌린지 로직: 미션 로드 → 소개 화면 → 런 시작 시 규칙 적용 → 체크포인트에서 판정 → 슬로모션 → 결과 UI
-    /// 표시 포맷: 속도/높이 소수 1자리, 나머지 정수(ChallengeUI에서 포맷 제어)
+    /// 챌린지 로직(겸용 버전)
+    /// - 기본: MissionData.checkpoint(CoasterSensor)를 직접 사용
+    /// - 선택: MissionData.checkpointId(string) + 이 매니저의 Checkpoints 배열(id↔sensor/focus) 매핑 사용
+    /// - 런 시작 시 규칙 적용 → 체크포인트에서 판정 → 슬로모션 → 결과 UI
     /// </summary>
     [DisallowMultipleComponent]
     public class ChallengeManager : MonoBehaviour
     {
         [Header("Mission")]
-        public MissionData mission;          // 인스펙터에서 선택
+        public MissionData mission;
 
         [Header("Refs")]
-        public Rigidbody trainRb;            // 열차 RB(속도/초기속도)
-        public Terrain terrain;              // 높이 기준 Terrain(없으면 Raycast)
-        public Transform baseline;           // 기준 포인트(없으면 trainRoot)
-        public Transform trainRoot;          // 열차 루트(기준/높이)
-        public FrictionController friction;  // 규칙 강제 On
-        public StartRegionBinder startBinder;// 편집/슬라이더 잠금
+        public Rigidbody          trainRb;
+        public Terrain            terrain;
+        public Transform          baseline;
+        public Transform          trainRoot;
+        public FrictionController friction;
+        public StartRegionBinder  startBinder;
 
         [Header("UI")]
         public ChallengeUI ui;
 
+        // ---- Checkpoint 매핑용 타입 선언(필드 아님) ----
+        [System.Serializable]
+        public struct CheckpointBinding
+        {
+            [Tooltip("미션 SO의 checkpointId와 일치(예: ground, hill1top)")]
+            public string id;
+            public CoasterSensor sensor;   // 판정 센서
+            public Transform     focus;    // 연출용 포커스(없으면 sensor.transform)
+        }
+
+        // <<< 여기 '배열 필드'에만 Header를 붙입니다 >>>
+        [Header("Checkpoints (optional)")]
+        [Tooltip("문자열 ID ↔ 센서/포커스를 연결(원할 때만 사용). SO가 CoasterSensor를 직접 들고 있으면 비워도 됩니다.")]
+        public CheckpointBinding[] checkpoints;
+
         [Header("Debug")]
         public bool debugLogs = true;
 
-        // 내부 상태
-        bool runActive;
-        float peakHeight; // 시작~체크포인트 사이 최고 높이(m)
+        // 내부
+        readonly Dictionary<string, CheckpointBinding> _cpMap = new();
+        CoasterSensor _activeSensor;
+        Transform     _activeFocus;
+        bool  runActive;
+        float peakHeight;
         float groundAtStart;
+
+        // ───────────────── lifecycle
+        void Awake()
+        {
+            if (!terrain) terrain = Terrain.activeTerrain;
+            if (!trainRoot && trainRb) trainRoot = trainRb.transform;
+            RebuildCheckpointMap();
+        }
+
+        void OnValidate()
+        {
+            if (!Application.isPlaying) RebuildCheckpointMap();
+        }
 
         void OnEnable()
         {
-            if (!terrain) terrain = Terrain.activeTerrain;
-
-            // 런 흐름 구독
             if (GameModeManager.I)
             {
                 GameModeManager.I.OnRunStart.AddListener(OnRunStart);
@@ -46,7 +77,9 @@ namespace CoasterSpline
             }
 
             // 센서 구독
-            if (mission && mission.checkpoint)
+            if (ResolveActiveCheckpoint() && _activeSensor)
+                _activeSensor.OnTrainEnter.AddListener(OnCheckpointEnter);
+            else if (mission && mission.checkpoint)
                 mission.checkpoint.OnTrainEnter.AddListener(OnCheckpointEnter);
         }
 
@@ -58,13 +91,13 @@ namespace CoasterSpline
                 GameModeManager.I.OnRunEnd  .RemoveListener(OnRunEnd);
                 GameModeManager.I.OnRunReset.RemoveListener(OnRunReset);
             }
-            if (mission && mission.checkpoint)
-                mission.checkpoint.OnTrainEnter.RemoveListener(OnCheckpointEnter);
+
+            if (_activeSensor) _activeSensor.OnTrainEnter.RemoveListener(OnCheckpointEnter);
+            if (mission && mission.checkpoint) mission.checkpoint.OnTrainEnter.RemoveListener(OnCheckpointEnter);
         }
 
         void Start()
         {
-            // 소개 화면 표시
             if (ui && mission)
             {
                 ui.SetupIntro(mission);
@@ -77,43 +110,80 @@ namespace CoasterSpline
         {
             if (!runActive || !trainRoot) return;
 
-            // 현재 높이(지면 기준)
             float gy = GetGroundYAt(trainRoot.position);
             float h  = Mathf.Max(0f, trainRoot.position.y - gy);
             if (h > peakHeight) peakHeight = h;
         }
 
-        // ───────────────────────── 런 플로우 ─────────────────────────
+        // ───────────────── map & resolve
+        void RebuildCheckpointMap()
+        {
+            _cpMap.Clear();
+            if (checkpoints == null) return;
+            foreach (var b in checkpoints)
+            {
+                if (string.IsNullOrEmpty(b.id)) continue;
+                if (_cpMap.ContainsKey(b.id))
+                {
+                    if (debugLogs) Debug.LogWarning($"[Challenge] Duplicate checkpoint id: {b.id}");
+                    continue;
+                }
+                _cpMap.Add(b.id, b);
+            }
+        }
+
+        bool ResolveActiveCheckpoint()
+        {
+            _activeSensor = null;
+            _activeFocus  = null;
+            if (mission == null) return false;
+
+            // 1) SO의 직접 참조 우선
+            if (mission.checkpoint)
+            {
+                _activeSensor = mission.checkpoint;
+                _activeFocus  = mission.focusOverride ? mission.focusOverride : mission.checkpoint.transform;
+                return true;
+            }
+
+            // 2) ID 매핑(선택)
+            if (!string.IsNullOrEmpty(mission.checkpointId) && _cpMap.TryGetValue(mission.checkpointId, out var b))
+            {
+                _activeSensor = b.sensor;
+                _activeFocus  = b.focus ? b.focus : (b.sensor ? b.sensor.transform : null);
+                return _activeSensor != null;
+            }
+
+            return false;
+        }
+
+        // ───────────────── run flow
         void OnRunStart()
         {
             if (debugLogs) Debug.Log("[Challenge] RunStart");
-
-            // UI 숨김
             if (ui) { ui.ShowIntro(false); ui.ShowResult(false); }
 
-            // 규칙 적용
             if (mission != null)
             {
                 if (friction) friction.SetEnabled(mission.forceFrictionOn);
 
                 if (startBinder)
                 {
-                    // 편집 잠금
                     startBinder.enabled = !mission.lockEditing;
                     if (mission.lockStartHeight && startBinder.heightSlider)
                         startBinder.heightSlider.interactable = false;
                 }
 
-                // 초기 속도/질량
                 if (trainRb)
                 {
                     trainRb.isKinematic = false;
-                    // 초기 속도
+
                     float v0 = Mathf.Max(0f, mission.startSpeed);
                     Vector3 dir = (trainRoot ? trainRoot.forward : Vector3.forward).normalized;
-                    trainRb.velocity = dir * v0;
+                    trainRb.velocity        = dir * v0;
                     trainRb.angularVelocity = Vector3.zero;
                 }
+
                 if (mission.massOverride >= 0f)
                 {
                     var hud = FindObjectOfType<HUD_All_TMP>(true);
@@ -121,14 +191,12 @@ namespace CoasterSpline
                 }
             }
 
-            // 기준 지면 높이 기록
             Vector3 probe = trainRoot ? trainRoot.position :
                             (baseline ? baseline.position : transform.position);
             groundAtStart = GetGroundYAt(probe);
 
-            // 피크 리셋
             peakHeight = 0f;
-            runActive = true;
+            runActive  = true;
         }
 
         void OnRunEnd()
@@ -143,7 +211,6 @@ namespace CoasterSpline
             Time.timeScale = 1f;
             runActive = false;
 
-            // 편집 복구
             if (startBinder)
             {
                 startBinder.enabled = true;
@@ -158,45 +225,44 @@ namespace CoasterSpline
             }
         }
 
-        // ───────────────────── 체크포인트 판정 ─────────────────────
+        // ───────────────── judge
         void OnCheckpointEnter()
         {
             if (!runActive || mission == null) return;
 
-            bool success = false;
-            string headline = "", subline = "";
+            bool   success  = false;
+            string headline = "";
+            string subline  = "";
 
             switch (mission.goal)
             {
                 case GoalType.SpeedAtCheckpoint:
                 {
                     float speed = (trainRb ? trainRb.velocity.magnitude : 0f);
-                    success = Compare(speed, mission.targetValue, mission.tolerance, mission.compare);
+                    success  = Compare(speed, mission.targetValue, mission.tolerance, mission.compare);
                     headline = success ? mission.successText : mission.failText;
                     subline  = $"속도 {speed:0.0} m/s  (목표 {mission.targetValue:0.0})";
                     break;
                 }
+
                 case GoalType.PeakHeightBeforeCheckpoint:
                 {
-                    success = Compare(peakHeight, mission.targetValue, mission.tolerance, mission.compare);
+                    success  = Compare(peakHeight, mission.targetValue, mission.tolerance, mission.compare);
                     headline = success ? mission.successText : mission.failText;
                     subline  = $"최고높이 {peakHeight:0.0} m  (목표 {mission.targetValue:0.0})";
                     break;
                 }
             }
 
-            // 연출 + 결과
             StartCoroutine(ShowResultRoutine(success, headline, subline));
         }
 
         IEnumerator ShowResultRoutine(bool success, string headline, string subline)
         {
-            // 슬로모션
             float old = Time.timeScale;
             Time.timeScale = (mission ? Mathf.Clamp(mission.slowmoScale, 0.05f, 1f) : 0.25f);
             float hold = (mission ? Mathf.Max(0.2f, mission.slowmoHoldRealtime) : 1.2f);
 
-            // 결과 UI 표시
             if (ui)
             {
                 ui.SetupResult(success, headline, subline);
@@ -204,22 +270,18 @@ namespace CoasterSpline
             }
 
             yield return new WaitForSecondsRealtime(hold);
-            Time.timeScale = 1f;
-
-            // 여기서 바로 정지/리셋은 하지 않고, UI의 Reset 버튼에 맡기길 권장
-            // 필요 시 자동 리셋하려면 아래 한 줄 활성화:
-            // GameModeManager.I?.ResetRun();
+            Time.timeScale = old;
+            // GameModeManager.I?.ResetRun(); // 자동리셋 원하면 주석 해제
         }
 
-        // ───────────────────────── Utils ─────────────────────────
+        // ───────────────── utils
         bool Compare(float value, float target, float tol, CompareMode mode)
         {
             switch (mode)
             {
                 case CompareMode.AtLeast: return value >= target - tol;
                 case CompareMode.AtMost:  return value <= target + tol;
-                default: // Near
-                    return Mathf.Abs(value - target) <= Mathf.Abs(tol);
+                default:                  return Mathf.Abs(value - target) <= Mathf.Abs(tol);
             }
         }
 

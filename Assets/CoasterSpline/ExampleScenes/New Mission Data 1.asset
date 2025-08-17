@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 22f464813002b5e4db124f0501e80a07, type: 3}
+  m_Name: New Mission Data 1
+  m_EditorClassIdentifier: 
+  missionId: "J1-\uB192\uC774\uBBF8\uC158"
+  grade: 
+  title: "\uB192\uC774 14\uBBF8\uD130\uAE4C\uC9C0\uB9CC \uC62C\uB77C\uAC00\uAE30"
+  description: "\uB864\uB7EC\uCF54\uC2A4\uD130\uC758 \uB192\uC774 \uC9C8\uB7C9\uC744
+    \uC218\uC815\uD574 \uB192\uC774 14\uBBF8\uD130\uAE4C\uC9C0\uB9CC \uC62C\uB77C\uAC00\uBCF4\uC138\uC694"
+  successText: "\uC131\uACF5!"
+  failText: "\uC2E4\uD328"
+  goal: 1
+  compare: 0
+  targetValue: 14
+  tolerance: 0.2
+  checkpoint: {fileID: 0}
+  checkpointId: 
+  focusOverride: {fileID: 0}
+  forceFrictionOn: 1
+  lockEditing: 1
+  lockStartHeight: 1
+  startSpeed: 0
+  massOverride: -1
+  slowmoScale: 0.25
+  slowmoHoldRealtime: 1.2
