@@ -1,4 +1,3 @@
-// Assets/CoasterSpline/Scripts/myScripts/StartRegionBinder.cs
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
@@ -6,46 +5,36 @@ using UnityEngine.UI;
 
 namespace CoasterSpline
 {
-    /// <summary>
-    /// 시작 구간 동기 이동/정렬 도우미.
-    /// - (선택) 스테이션 근처 앵커 자동 탐지
-    /// - 슬라이더(절대높이 or 오프셋)로 앵커 높이 이동 → 트랙 재생성
-    /// - 스테이션/기둥/엑셀/센서/기차도 같은 Δy로 이동
-    /// - (옵션) 플레이 시작 시 씬의 높이를 '기본값'으로 슬라이더만 맞춤
-    /// </summary>
     [DisallowMultipleComponent]
     public class StartRegionBinder : MonoBehaviour
     {
-        #region Track - 대상 앵커 선택
+        #region Track 선택
         [Header("Track (CoasterGenerator)")]
         public CoasterGenerator generator;
 
-        [Tooltip("스테이션 근처 앵커를 자동으로 찾아 시작 구간으로 사용")]
         public bool autoDetectAnchors = true;
-        public Transform stationRoot;                 // 자동탐지 기준점
-        [Min(1)] public int autoAnchorCount = 8;      // 시작구간으로 이동시킬 앵커 개수
+        public Transform stationRoot;
+        [Min(1)] public int autoAnchorCount = 8;
 
-        [Tooltip("수동 지정 시 사용")]
         public int chainIndex = 0;
         public int startAnchor = 0;
         public int anchorCount = 20;
 
         [Header("범위 옵션")]
-        [Tooltip("체인의 전 앵커를 모두 이동(간단 모드)")]
         public bool affectAllChains = false;
 
-        [Tooltip("기차 뒤쪽(X-방향)은 항상 포함(빠른해결 1)")]
+        [Tooltip("기차 뒤쪽(X<=train.x)은 항상 포함(빠른해결1)")]
         public bool alwaysIncludeBehindTrain = true;
-        public Transform trainRoot;                   // 뒤쪽 판정 기준(없으면 stationRoot 사용)
+        public Transform trainRoot;
         #endregion
 
-        #region 절대높이 / 오프셋 모드
+        #region 절대/오프셋 모드
         [Header("Absolute Height (권장)")]
         public bool useAbsoluteHeight = true;
         public Terrain terrain;
-        [Tooltip("지면 위 최소 높이(m)")] public float minClearance = 0f;
-        [Tooltip("지면 위 최대 높이(m)")] public float maxAboveGround = 15f;
-        public Slider heightSlider;                   // UI 슬라이더(선택)
+        public float minClearance = 0f;
+        public float maxAboveGround = 15f;
+        public Slider heightSlider;
 
         [Header("Offset Mode (0~1 -> min~max)")]
         public float minOffset = 0f;
@@ -60,7 +49,7 @@ namespace CoasterSpline
         public List<Transform> extraTransforms = new();
 
         [Header("Sync Train")]
-        public Rigidbody trainRb;                    // 있으면 위치 갱신 후 속도 0
+        public Rigidbody trainRb;
         public bool moveTrainOnlyWhenNotRunning = true;
 
         [Header("Auto Collect (optional)")]
@@ -70,28 +59,17 @@ namespace CoasterSpline
         public string supportTag = "Support";
         #endregion
 
-        #region Defaults (요청 기능)
-        [Header("Defaults")]
-        [Tooltip("플레이 시작 시, 씬에 놓여 있던 높이를 기준으로 '슬라이더만' 조용히 맞춤")]
-        public bool initSliderAtPlay = true;
+        #region 내부 상태
+        struct AnchorRef { public int chain; public int index; public Vector3 basePos; }
 
-        [Tooltip("기본 참조 높이: 기차(있으면) → 없으면 스테이션")]
-        public bool useTrainYAsDefault = true;
-        #endregion
+        readonly List<AnchorRef> _targets = new();
+        readonly Dictionary<Transform, float> _baseY = new();
 
-        // ───────── 내부 캐시 ─────────
-        struct AnchorRef
-        {
-            public int chain;
-            public int index;
-            public Vector3 basePos;
-        }
-
-        readonly List<AnchorRef> _targets = new();            // 이동 대상 앵커 + 원본 좌표
-        readonly Dictionary<Transform, float> _baseY = new(); // 이동 대상들의 원본 Y
-        float _baseStationY;                                   // 기준 y(Station or Train)
+        float _baseStationY;              // 씬 초기 기준 Y (기차/스테이션)
         bool _cached;
-        float _lastOffset;
+        float _lastAppliedOffset = 0f;    // 현재 씬에 적용된 오프셋(렌더 상태)
+        float _lastExploreOffset  = 0f;   // 탐색 모드에서 마지막으로 설정한 오프셋
+        #endregion
 
         void Awake()
         {
@@ -99,14 +77,10 @@ namespace CoasterSpline
             if (!terrain) terrain = Terrain.activeTerrain;
             if (!trainRoot && trainRb) trainRoot = trainRb.transform;
 
-            CacheBases();
+            CacheBases();                  // 베이스라인(기본값) 고정 저장
 
-            // 플레이 시작 시 UI만 현재 씬 높이에 맞춤
-            if (initSliderAtPlay) InitSliderToSceneHeight();
-
-            // 슬라이더에 직접 바인딩해도 됨(중복 바인딩은 피하세요)
-            if (heightSlider)
-                heightSlider.onValueChanged.AddListener(SetHeight01);
+            // 슬라이더 이벤트 연결(선택)
+            if (heightSlider) heightSlider.onValueChanged.AddListener(SetHeight01);
         }
 
         void OnValidate()
@@ -116,24 +90,23 @@ namespace CoasterSpline
         }
 
         // ─────────────────────────────────────────────────────
-        #region Public API
+        #region 외부 API
 
-        /// <summary>슬라이더에서 0..1 값이 들어오면 호출</summary>
+        /// <summary>슬라이더 0..1 -> 절대/오프셋 반영(탐색 전용: Explore 값 저장)</summary>
         public void SetHeight01(float t01)
         {
             if (!_cached) CacheBases();
             if (!_cached) return;
 
             t01 = Mathf.Clamp01(t01);
-
             float offset;
+
             if (useAbsoluteHeight)
             {
-                // 지면 기준 절대 높이 계산
-                Vector3 probe = (stationRoot ? stationRoot.position
-                                  : (trainRoot ? trainRoot.position : transform.position));
+                // 현재 기준 위치의 지면 높이
+                Vector3 probe = stationRoot ? stationRoot.position
+                               : (trainRoot ? trainRoot.position : transform.position);
                 float groundY = GetGroundYAt(probe);
-
                 float targetY = Mathf.Lerp(groundY + minClearance, groundY + maxAboveGround, t01);
                 offset = targetY - _baseStationY;
             }
@@ -142,55 +115,78 @@ namespace CoasterSpline
                 offset = Mathf.Lerp(minOffset, maxOffset, t01);
             }
 
-            ApplyOffset(offset);
+            ApplyOffset(offset, rememberExplore:true);
         }
 
-        /// <summary>
-        /// AppController 등에서 직접 '지면 위 높이(m)'로 설정하고 싶을 때 호출.
-        /// useAbsoluteHeight 설정과 무관하게 작동합니다.
-        /// </summary>
-        public void SetAbsoluteHeight(float metersAboveGround)
+        /// <summary>절대 높이(미터) 직접 지정(탐색 전용)</summary>
+        public void SetAbsoluteHeight(float meters)
         {
             if (!_cached) CacheBases();
             if (!_cached) return;
 
-            Vector3 probe = (stationRoot ? stationRoot.position
-                              : (trainRoot ? trainRoot.position : transform.position));
+            Vector3 probe = stationRoot ? stationRoot.position
+                           : (trainRoot ? trainRoot.position : transform.position);
             float groundY = GetGroundYAt(probe);
+            meters = Mathf.Clamp(meters, groundY + minClearance, groundY + maxAboveGround);
 
-            float clamped = Mathf.Clamp(metersAboveGround, minClearance, maxAboveGround);
-            float targetY = groundY + clamped;
-            float offset = targetY - _baseStationY;
+            float offset = meters - _baseStationY;
+            ApplyOffset(offset, rememberExplore:true);
+        }
 
-            ApplyOffset(offset);
+        /// <summary>탐색 모드로 들어갈 때 호출: 마지막 탐색 오프셋 재적용</summary>
+        public void EnterExploreMode()
+        {
+            // 베이스라인에서 탐색 오프셋만 적용
+            ApplyOffset(_lastExploreOffset, rememberExplore:false);
+            SyncSliderToCurrent();
+        }
 
-            // UI 동기화(있으면)
-            if (heightSlider && useAbsoluteHeight)
+        /// <summary>챌린지/실험 등: 항상 기본값(베이스라인)으로 복귀</summary>
+        public void EnterChallengeMode()
+        {
+            ApplyOffset(0f, rememberExplore:false); // 베이스라인
+        }
+
+        /// <summary>현재 씬 상태 기준으로 슬라이더만 조용히 동기화</summary>
+        public void SyncSliderToCurrent()
+        {
+            if (!heightSlider) return;
+
+            if (useAbsoluteHeight)
             {
-                float t01 = Mathf.InverseLerp(groundY + minClearance, groundY + maxAboveGround, targetY);
+                // 지금 적용된 오프셋을 절대 높이 값으로 환산 후 UI만 동기화
+                float currentY = _baseStationY + _lastAppliedOffset;
+
+                Vector3 probe = stationRoot ? stationRoot.position
+                               : (trainRoot ? trainRoot.position : transform.position);
+                float g = GetGroundYAt(probe);
+
+                float t01 = Mathf.InverseLerp(g + minClearance, g + maxAboveGround, currentY);
+                heightSlider.SetValueWithoutNotify(Mathf.Clamp01(t01));
+            }
+            else
+            {
+                float t01 = Mathf.InverseLerp(minOffset, maxOffset, _lastAppliedOffset);
                 heightSlider.SetValueWithoutNotify(Mathf.Clamp01(t01));
             }
         }
 
-        /// <summary>캐시 재작성(씬 편집 후 수동 호출용)</summary>
+        /// <summary>씬 로드 직후 1회: 베이스라인 캐싱</summary>
         public void CacheBases()
         {
             _cached = false;
             _targets.Clear();
             _baseY.Clear();
 
-            if (!generator || generator.Chains == null || generator.Chains.Count == 0)
-                return;
+            if (!generator || generator.Chains == null || generator.Chains.Count == 0) return;
 
-            // 기준 Y(씬 상태)
-            float refY = (useTrainYAsDefault && trainRoot) ? trainRoot.position.y
-                       : (stationRoot ? stationRoot.position.y : transform.position.y);
-            _baseStationY = refY;
+            // 기준 Y(처음 씬 상태를 베이스라인으로 고정)
+            _baseStationY = (trainRoot ? trainRoot.position.y :
+                            (stationRoot ? stationRoot.position.y : transform.position.y));
 
-            // 이동할 앵커 집합 구성
             BuildAnchorTargets();
 
-            // 동기 이동 대상 원본 Y 캐시
+            // 동기 이동 대상의 초기 Y
             if (stationRoot && !_baseY.ContainsKey(stationRoot)) _baseY[stationRoot] = stationRoot.position.y;
 
             if (autoFindSupportsByTag)
@@ -221,20 +217,21 @@ namespace CoasterSpline
             foreach (var tr in extraTransforms) if (tr && !_baseY.ContainsKey(tr)) _baseY[tr] = tr.position.y;
             if (trainRoot && !_baseY.ContainsKey(trainRoot)) _baseY[trainRoot] = trainRoot.position.y;
 
-            _lastOffset = 0f;
+            _lastAppliedOffset = 0f;
+            // 탐색값도 초기 0 (탐색에서만 바뀜)
+            _lastExploreOffset  = 0f;
+
             _cached = true;
         }
-
         #endregion
-        // ─────────────────────────────────────────────────────
 
-        #region Internals
+        // ─────────────────────────────────────────────────────
+        #region 내부 동작
 
         void BuildAnchorTargets()
         {
             _targets.Clear();
 
-            // 1) affectAllChains면 모든 체인의 모든 앵커 수집
             if (affectAllChains)
             {
                 for (int ci = 0; ci < generator.Chains.Count; ci++)
@@ -246,13 +243,11 @@ namespace CoasterSpline
                 return;
             }
 
-            // 2) 자동탐지 or 수동 구간
             int useChain = chainIndex, useStart = startAnchor, useCount = anchorCount;
 
             if (autoDetectAnchors && stationRoot)
             {
-                float best = float.MaxValue;
-                int bestChain = 0, bestAnchor = 0;
+                float best = float.MaxValue; int bestC = 0, bestA = 0;
 
                 for (int ci = 0; ci < generator.Chains.Count; ci++)
                 {
@@ -261,16 +256,15 @@ namespace CoasterSpline
                     {
                         Vector3 wp = ch.Anchors[ai].Position + generator.transform.position;
                         float d = (wp - stationRoot.position).sqrMagnitude;
-                        if (d < best) { best = d; bestChain = ci; bestAnchor = ai; }
+                        if (d < best) { best = d; bestC = ci; bestA = ai; }
                     }
                 }
 
-                useChain = bestChain;
-                useStart = Mathf.Max(0, bestAnchor - (autoAnchorCount / 2));
+                useChain = bestC;
+                useStart = Mathf.Max(0, bestA - (autoAnchorCount / 2));
                 useCount = Mathf.Clamp(autoAnchorCount, 1, generator.Chains[useChain].Anchors.Count - useStart);
             }
 
-            // 대상 구간 수집
             var chain = generator.Chains[Mathf.Clamp(useChain, 0, generator.Chains.Count - 1)];
             int n = Mathf.Clamp(useCount, 1, chain.Anchors.Count - useStart);
 
@@ -280,7 +274,6 @@ namespace CoasterSpline
                 _targets.Add(new AnchorRef { chain = useChain, index = ai, basePos = chain.Anchors[ai].Position });
             }
 
-            // 3) 빠른해결 1: 기차 '뒤쪽'은 항상 포함(X가 기준)
             if (alwaysIncludeBehindTrain && (trainRoot || stationRoot))
             {
                 Transform refTf = trainRoot ? trainRoot : stationRoot;
@@ -302,31 +295,28 @@ namespace CoasterSpline
             }
         }
 
-        void ApplyOffset(float offset)
+        void ApplyOffset(float offset, bool rememberExplore)
         {
-            _lastOffset = offset;
-
-            // A) 앵커 이동
+            // A) 앵커 이동 (베이스라인 + offset)
             foreach (var t in _targets)
             {
                 var ch = generator.Chains[t.chain];
                 if (t.index < 0 || t.index >= ch.Anchors.Count) continue;
 
                 var a = ch.Anchors[t.index];
-                var p = t.basePos;
-                a.Position = new Vector3(p.x, p.y + offset, p.z);
+                a.Position = new Vector3(t.basePos.x, t.basePos.y + offset, t.basePos.z);
                 ch.SetDirty();
             }
             RebuildGenerator();
 
-            // B) 기타 오브젝트 이동
+            // B) 기타 객체 이동
             foreach (var kv in _baseY)
             {
                 var tr = kv.Key; if (!tr) continue;
                 tr.position = new Vector3(tr.position.x, kv.Value + offset, tr.position.z);
             }
 
-            // C) 기차 리지드바디 정지
+            // C) 기차 RB 정지(옵션)
             if (trainRb)
             {
                 trainRb.velocity = Vector3.zero;
@@ -334,6 +324,9 @@ namespace CoasterSpline
                 if (!trainRb.isKinematic && trainRoot)
                     trainRb.position = new Vector3(trainRb.position.x, _baseY[trainRoot] + offset, trainRb.position.z);
             }
+
+            _lastAppliedOffset = offset;
+            if (rememberExplore) _lastExploreOffset = offset;
         }
 
         void RebuildGenerator()
@@ -355,36 +348,8 @@ namespace CoasterSpline
             if (Physics.Raycast(worldPos + Vector3.up * 200f, Vector3.down, out var hit, 1000f))
                 return hit.point.y;
 
-            return 0f; // fallback
+            return 0f;
         }
-
-        /// <summary>
-        /// 플레이 시작 시, 씬의 높이를 '기본값'으로 슬라이더만 맞춤(트랙은 그대로)
-        /// </summary>
-        void InitSliderToSceneHeight()
-        {
-            if (!heightSlider) return;
-
-            if (useAbsoluteHeight)
-            {
-                float yRef =
-                    (useTrainYAsDefault && trainRoot) ? trainRoot.position.y :
-                    (stationRoot ? stationRoot.position.y : _baseStationY);
-
-                Vector3 probe = stationRoot ? stationRoot.position
-                                  : (trainRoot ? trainRoot.position : transform.position);
-                float ground = GetGroundYAt(probe);
-
-                float t01 = Mathf.InverseLerp(ground + minClearance, ground + maxAboveGround, yRef);
-                heightSlider.SetValueWithoutNotify(Mathf.Clamp01(t01));
-            }
-            else
-            {
-                float t01 = Mathf.InverseLerp(minOffset, maxOffset, 0f);
-                heightSlider.SetValueWithoutNotify(Mathf.Clamp01(t01));
-            }
-        }
-
         #endregion
     }
 }

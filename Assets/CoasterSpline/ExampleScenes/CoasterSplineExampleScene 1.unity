@@ -1592,7 +1592,19 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 495549605}
   m_OnClick:
     m_PersistentCalls:
-      m_Calls: []
+      m_Calls:
+      - m_Target: {fileID: 1697524130}
+        m_TargetAssemblyTypeName: CoasterSpline.GameModeManager, Assembly-CSharp
+        m_MethodName: SetModeExplore
+        m_Mode: 1
+        m_Arguments:
+          m_ObjectArgument: {fileID: 0}
+          m_ObjectArgumentAssemblyTypeName: UnityEngine.Object, UnityEngine
+          m_IntArgument: 0
+          m_FloatArgument: 0
+          m_StringArgument: 
+          m_BoolArgument: 0
+        m_CallState: 2
 --- !u!114 &495549605
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2450,7 +2462,19 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 619537317}
   m_OnClick:
     m_PersistentCalls:
-      m_Calls: []
+      m_Calls:
+      - m_Target: {fileID: 0}
+        m_TargetAssemblyTypeName: 
+        m_MethodName: 
+        m_Mode: 1
+        m_Arguments:
+          m_ObjectArgument: {fileID: 0}
+          m_ObjectArgumentAssemblyTypeName: 
+          m_IntArgument: 0
+          m_FloatArgument: 0
+          m_StringArgument: 
+          m_BoolArgument: 0
+        m_CallState: 2
 --- !u!114 &619537317
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2573,9 +2597,9 @@ MonoBehaviour:
   m_HandleRect: {fileID: 561313887}
   m_Direction: 0
   m_MinValue: 0
-  m_MaxValue: 1
+  m_MaxValue: 20
   m_WholeNumbers: 0
-  m_Value: 0.5
+  m_Value: 0
   m_OnValueChanged:
     m_PersistentCalls:
       m_Calls:
@@ -2771,7 +2795,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5670083940464931158, guid: 84e2904b9dcba2e44934060d3f3548a8, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 21.27
+      value: 20.09
       objectReference: {fileID: 0}
     - target: {fileID: 5670083940464931158, guid: 84e2904b9dcba2e44934060d3f3548a8, type: 3}
       propertyPath: m_LocalPosition.y
@@ -4117,8 +4141,8 @@ MonoBehaviour:
   m_OnClick:
     m_PersistentCalls:
       m_Calls:
-      - m_Target: {fileID: 1697524130}
-        m_TargetAssemblyTypeName: CoasterSpline.GameModeManager, Assembly-CSharp
+      - m_Target: {fileID: 1541463901}
+        m_TargetAssemblyTypeName: CoasterSpline.AppController, Assembly-CSharp
         m_MethodName: StartRun
         m_Mode: 1
         m_Arguments:
@@ -4224,12 +4248,16 @@ MonoBehaviour:
   useAbsoluteHeight: 1
   terrain: {fileID: 1092502489}
   minClearance: 0
-  maxAboveGround: 15
+  maxAboveGround: 40
   heightSlider: {fileID: 619758102}
   minOffset: 0
-  maxOffset: 20
+  maxOffset: 40
   supportRoots: []
-  accelerators: []
+  accelerators:
+  - {fileID: 497693040}
+  - {fileID: 1127041062}
+  - {fileID: 109489576}
+  - {fileID: 1668003559}
   sensors: []
   extraTransforms: []
   trainRb: {fileID: 1951281463}
@@ -4238,8 +4266,6 @@ MonoBehaviour:
   autoFindSensors: 1
   autoFindSupportsByTag: 0
   supportTag: Support
-  initSliderAtPlay: 1
-  useTrainYAsDefault: 1
 --- !u!1001 &1070330639
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -5705,17 +5731,18 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8f67bb4258cf23f41972751f15609289, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  startBinder: {fileID: 0}
+  startBinder: {fileID: 1042264434}
   trainRb: {fileID: 1951281463}
   trainForward: {fileID: 1951281462}
   friction: {fileID: 1951281464}
   coasterCam: {fileID: 3340406}
   mouseOrbit: {fileID: 0}
+  boomerang: {fileID: 503498591}
   heightSlider: {fileID: 619758102}
   heightInput: {fileID: 0}
   massInput: {fileID: 0}
   startSpeedInput: {fileID: 0}
-  frictionToggle: {fileID: 0}
+  frictionToggle: {fileID: 811437110}
   hud: {fileID: 1236903131}
 --- !u!1001 &1574172275
 PrefabInstance:
@@ -6790,8 +6817,8 @@ MonoBehaviour:
   OnRunStart:
     m_PersistentCalls:
       m_Calls:
-      - m_Target: {fileID: 1541463901}
-        m_TargetAssemblyTypeName: CoasterSpline.AppController, Assembly-CSharp
+      - m_Target: {fileID: 1697524130}
+        m_TargetAssemblyTypeName: CoasterSpline.GameModeManager, Assembly-CSharp
         m_MethodName: StartRun
         m_Mode: 1
         m_Arguments:
@@ -6805,8 +6832,8 @@ MonoBehaviour:
   OnRunEnd:
     m_PersistentCalls:
       m_Calls:
-      - m_Target: {fileID: 1541463901}
-        m_TargetAssemblyTypeName: CoasterSpline.AppController, Assembly-CSharp
+      - m_Target: {fileID: 1697524130}
+        m_TargetAssemblyTypeName: CoasterSpline.GameModeManager, Assembly-CSharp
         m_MethodName: EndRun
         m_Mode: 1
         m_Arguments:
@@ -6820,8 +6847,8 @@ MonoBehaviour:
   OnRunReset:
     m_PersistentCalls:
       m_Calls:
-      - m_Target: {fileID: 1541463901}
-        m_TargetAssemblyTypeName: CoasterSpline.AppController, Assembly-CSharp
+      - m_Target: {fileID: 1697524130}
+        m_TargetAssemblyTypeName: CoasterSpline.GameModeManager, Assembly-CSharp
         m_MethodName: ResetRun
         m_Mode: 1
         m_Arguments:
